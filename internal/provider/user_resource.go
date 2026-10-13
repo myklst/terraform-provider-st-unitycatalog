@@ -47,6 +47,7 @@ type userResourceModel struct {
 	DisplayName types.String `tfsdk:"display_name"`
 	Emails      types.List   `tfsdk:"emails"`
 	Active      types.Bool   `tfsdk:"active"`
+	Purge       types.Bool   `tfsdk:"purge"`
 }
 
 // emailAttrTypes is the attr.Type mapping for the email nested object.
@@ -108,6 +109,15 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"active": schema.BoolAttribute{
 				Description: "Whether the user is active.",
 				Required:    true,
+			},
+			"purge": schema.BoolAttribute{
+				Description: "When true, deletion fully removes the user and frees their " +
+					"email (DELETE /scim2/Users/{id}?purge=true). When false (the default), " +
+					"deletion deactivates the user while preserving their grants, making the " +
+					"operation reversible. This attribute only affects the Delete operation.",
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
 			},
 		},
 	}
@@ -221,6 +231,10 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
+	// purge is a Terraform-only attribute not returned by the API; carry it
+	// over from the plan.
+	state.Purge = plan.Purge
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -242,6 +256,10 @@ func (r *userResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	// purge is a Terraform-only attribute not returned by the API; preserve
+	// the existing value from state.
+	updated.Purge = state.Purge
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &updated)...)
 }
@@ -281,6 +299,10 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
+	// purge is a Terraform-only attribute not returned by the API; carry it
+	// over from the plan.
+	result.Purge = plan.Purge
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &result)...)
 }
 
@@ -291,7 +313,28 @@ func (r *userResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	if err := r.client.DeleteUser(ctx, state.Id.ValueString()); err != nil {
+	// When purge is true, the server requires confirm_principal to be set to
+	// the user's primary email. Extract it from state.
+	confirmPrincipal := ""
+	if state.Purge.ValueBool() {
+		var emails []emailModel
+		resp.Diagnostics.Append(state.Emails.ElementsAs(ctx, &emails, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		for _, e := range emails {
+			if e.Primary.ValueBool() {
+				confirmPrincipal = e.Value.ValueString()
+				break
+			}
+		}
+		// Fall back to the first email if none is marked primary.
+		if confirmPrincipal == "" && len(emails) > 0 {
+			confirmPrincipal = emails[0].Value.ValueString()
+		}
+	}
+
+	if err := r.client.DeleteUser(ctx, state.Id.ValueString(), state.Purge.ValueBool(), confirmPrincipal); err != nil {
 		resp.Diagnostics.AddError("Failed to delete Unity Catalog user", err.Error())
 		return
 	}

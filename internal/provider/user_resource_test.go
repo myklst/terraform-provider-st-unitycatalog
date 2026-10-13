@@ -87,6 +87,7 @@ resource "st-unitycatalog_user" "test" {
     primary = true
   }]
   active = %[4]t
+  purge  = true
 }
 `, providerConfig, displayName, email, active)
 }

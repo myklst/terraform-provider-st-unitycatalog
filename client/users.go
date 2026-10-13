@@ -107,17 +107,48 @@ func (c *Client) UpdateUser(ctx context.Context, u *User) (*User, error) {
 	return &updated, nil
 }
 
-// DeleteUser deletes a user via DELETE /scim2/Users/{id}. A 404 response is
-// treated as success (the resource is already gone).
-func (c *Client) DeleteUser(ctx context.Context, id string) error {
-	resp, err := c.do(ctx, http.MethodDelete, c.userURL(id), nil)
+// DeleteUser deletes (or deactivates) a user via DELETE /scim2/Users/{id}.
+// When purge is false (the default), the user is deactivated but their grants
+// are preserved, making the operation reversible. When purge is true, the
+// user is first deactivated (DELETE without purge), then permanently removed
+// (DELETE with ?purge=true&confirm_principal=<confirmPrincipal>); the server
+// requires the user to be deactivated before purging, and confirmPrincipal must
+// be set to the user's primary email. A 404 response is treated as success
+// (the resource is already gone).
+func (c *Client) DeleteUser(ctx context.Context, id string, purge bool, confirmPrincipal string) error {
+	// Step 1: always deactivate the user (DELETE without purge).
+	deactivateResp, err := c.do(ctx, http.MethodDelete, c.userURL(id), nil)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
-		readBody(resp)
+	if deactivateResp.StatusCode != http.StatusNoContent && deactivateResp.StatusCode != http.StatusNotFound {
+		_, err = readResponse(deactivateResp, http.StatusOK, "deactivate user")
+		if err != nil {
+			readBody(deactivateResp)
+			return err
+		}
+	} else {
+		readBody(deactivateResp)
+	}
+
+	if !purge {
 		return nil
 	}
-	_, err = readResponse(resp, http.StatusOK, "delete user")
+
+	// Step 2: permanently remove the user (DELETE with purge=true).
+	params := url.Values{}
+	params.Set("purge", "true")
+	params.Set("confirm_principal", confirmPrincipal)
+	purgeURL := c.userURL(id) + "?" + params.Encode()
+
+	purgeResp, err := c.do(ctx, http.MethodDelete, purgeURL, nil)
+	if err != nil {
+		return err
+	}
+	if purgeResp.StatusCode == http.StatusNoContent || purgeResp.StatusCode == http.StatusNotFound {
+		readBody(purgeResp)
+		return nil
+	}
+	_, err = readResponse(purgeResp, http.StatusOK, "purge user")
 	return err
 }

@@ -34,6 +34,10 @@ resource "st-unitycatalog_user" "user" {
 - `emails` (Attributes List) The list of user emails. Changing this value forces replacement of the resource, because emails are immutable in Unity Catalog. (see [below for nested schema](#nestedatt--emails))
 - `schemas` (List of String) The SCIM2 schema URNs for the user resource, e.g. ["urn:ietf:params:scim:schemas:core:2.0:User"].
 
+### Optional
+
+- `purge` (Boolean) When true, deletion fully removes the user and frees their email (DELETE /scim2/Users/{id}?purge=true). When false (the default), deletion deactivates the user while preserving their grants, making the operation reversible. This attribute only affects the Delete operation.
+
 ### Read-Only
 
 - `id` (String) The SCIM2 identifier of the user, assigned by the server. This attribute is not user configurable but is sent back to the server in PUT requests as required by the SCIM2 API.
